@@ -1,7 +1,7 @@
 ﻿using Microsoft.AspNetCore.Http;
 using System.Security.Claims;
 
-namespace RateLimiter.Middlewares.KeyProviders
+namespace RateLimiter.KeyProviders
 {
     public class RateLimiterUserKeyProvider : IRateLimiterKeyProvider
     {

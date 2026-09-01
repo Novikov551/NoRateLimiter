@@ -1,21 +1,16 @@
 ﻿using Microsoft.AspNetCore.Builder;
-using RateLimiter.Middlewares;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace RateLimiter.Extensions
 {
     public static class IApplicationBuilderExtensions
     {
-        public static IApplicationBuilder UseRateLimiter(this IApplicationBuilder app,
-            Action<RateLimiterMiddlewareOptions>? configure = null)
+        public static IApplicationBuilder UseRateLimiter(this IApplicationBuilder app)
         {
-            var options = new RateLimiterMiddlewareOptions();
+            var builder = app.ApplicationServices.GetRequiredService<RateLimiterBuilder>();
+            builder.Build();
 
-            if(configure != null)
-            {
-                configure(options);
-            }
-
-            return app.UseMiddleware<RateLimiterMiddleware>(options);
+            return app.UseMiddleware<RateLimiterMiddleware>();
         }
     }
 }

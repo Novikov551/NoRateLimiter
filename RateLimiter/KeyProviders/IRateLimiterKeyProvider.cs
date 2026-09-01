@@ -1,6 +1,6 @@
 ﻿using Microsoft.AspNetCore.Http;
 
-namespace RateLimiter.Middlewares.KeyProviders
+namespace RateLimiter.KeyProviders
 {
     public interface IRateLimiterKeyProvider
     {

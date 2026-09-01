@@ -1,6 +1,4 @@
-﻿using RateLimiter.RateLimiters;
-
-namespace RateLimiter.Middlewares
+﻿namespace RateLimiter
 {
     public class UserLastAccessDto
     {
