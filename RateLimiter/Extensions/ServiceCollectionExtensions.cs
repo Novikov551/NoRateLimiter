@@ -14,10 +14,7 @@ namespace RateLimiter.Extensions
         {
             var options = new RateLimiterOptions();
 
-            if (configure != null)
-            {
-                configure(options);
-            }
+            configure(options);
 
             var validationsResult = options.Validate(new ValidationContext(options))
                 .ToList();

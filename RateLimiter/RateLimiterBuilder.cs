@@ -7,7 +7,7 @@ namespace RateLimiter
         internal RateLimiterOptions Options { get; }
         internal IServiceCollection Services { get; }
 
-        public RateLimiterBuilder(IServiceCollection services, RateLimiterOptions options)
+        internal RateLimiterBuilder(IServiceCollection services, RateLimiterOptions options)
         {
             Services = services;
             Options = options;

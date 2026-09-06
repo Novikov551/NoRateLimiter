@@ -1,7 +1,6 @@
 ﻿using Microsoft.Extensions.Logging;
 using RateLimiter.Exceptions;
 using StackExchange.Redis;
-using System.Threading;
 
 namespace RateLimiter.Storages
 {
@@ -9,14 +8,34 @@ namespace RateLimiter.Storages
     {
         private readonly RateLimiterOptions _options;
         private readonly IDatabase _database;
+        private readonly string _slidingWindowGetReset;
+        private readonly string _tokenBucketRefill;
+        private readonly string _slidingWindowGetRemaining;
+        private readonly string _slidingWindowTryConsume;
+        private readonly string _tokenBucketTryConsume;
+        private readonly double? _tokenGenerationRate;
+        private readonly ILogger<RedisRateLimiterStorage> _logger;
 
-        public RedisRateLimiterStorage(IConnectionMultiplexer multiplexer, 
+        public RedisRateLimiterStorage(IConnectionMultiplexer multiplexer,
             RateLimiterOptions options,
-            ILogger<RedisRateLimiterStorage> logger, 
+            ILogger<RedisRateLimiterStorage> logger,
             int db)
         {
             _options = options;
             _database = multiplexer.GetDatabase(db);
+
+            _slidingWindowGetReset = LoadLuaScript("sliding_window_get_reset");
+            _tokenBucketRefill = LoadLuaScript("token_bucket_refill");
+            _slidingWindowGetRemaining = LoadLuaScript("sliding_window_get_remaining");
+            _slidingWindowTryConsume = LoadLuaScript("sliding_window_try_consume");
+            _tokenBucketTryConsume = LoadLuaScript("token_bucket_try_consume");
+
+            if (_options.Type == RateLimiterType.TokenBucket)
+            {
+                _tokenGenerationRate = (double)_options.Capacity!.Value / _options.RefillRate!.Value + 10;
+            }
+
+            _logger = logger;
         }
 
         public int GetLimit(string key)
@@ -44,8 +63,8 @@ namespace RateLimiter.Storages
         {
             ct.ThrowIfCancellationRequested();
 
-            var result = (double)await _database.ScriptEvaluateAsync(LoadLuaScript("sliding_window_get_reset"), 
-                [key], 
+            var result = (double)await _database.ScriptEvaluateAsync(_slidingWindowGetReset,
+                [key],
                 [_options.Window!.Value.TotalSeconds]);
             return DateTime.UnixEpoch.AddSeconds(result).ToUniversalTime();
         }
@@ -56,15 +75,15 @@ namespace RateLimiter.Storages
 
             return _options.Type switch
             {
-                RateLimiterType.TokenBucket => (int)await _database.ScriptEvaluateAsync(LoadLuaScript("token_bucket_refill"), 
-                [key], 
-                [_options.Capacity, 
-                    _options.RefillRate,
-                    ( _options.Capacity!.Value / _options.RefillRate!.Value + 10)]),
-
-                RateLimiterType.SlidingWindow => (int)await _database.ScriptEvaluateAsync(LoadLuaScript("sliding_window_get_remaining"), 
+                RateLimiterType.TokenBucket => (int)await _database.ScriptEvaluateAsync(_tokenBucketRefill,
                 [key],
-                [_options.RequestsLimit!.Value, 
+                [_options.Capacity,
+                    _options.RefillRate,
+                    _tokenGenerationRate]),
+
+                RateLimiterType.SlidingWindow => (int)await _database.ScriptEvaluateAsync(_slidingWindowGetRemaining,
+                [key],
+                [_options.RequestsLimit!.Value,
                     _options.Window!.Value.TotalSeconds]),
 
                 _ => throw new UnknownRateLimiterTypeException(nameof(_options.Type))
@@ -77,17 +96,17 @@ namespace RateLimiter.Storages
 
             return _options.Type switch
             {
-                RateLimiterType.TokenBucket => (bool)await _database.ScriptEvaluateAsync(LoadLuaScript("token_bucket_try_consume"),
+                RateLimiterType.TokenBucket => (bool)await _database.ScriptEvaluateAsync(_tokenBucketTryConsume,
                 [key],
                 [_options.Capacity,
                     _options.RefillRate,
                     tokens,
-                    _options.Capacity!.Value/_options.RefillRate!.Value + 10]),
+                    _tokenGenerationRate]),
 
-                RateLimiterType.SlidingWindow => (bool)await _database.ScriptEvaluateAsync(LoadLuaScript("sliding_window_try_consume"),
+                RateLimiterType.SlidingWindow => (bool)await _database.ScriptEvaluateAsync(_slidingWindowTryConsume,
                 [key],
-                [_options.RequestsLimit!.Value, 
-                    _options.Window!.Value.TotalSeconds, 
+                [_options.RequestsLimit!.Value,
+                    _options.Window!.Value.TotalSeconds,
                     tokens]),
 
                 _ => throw new UnknownRateLimiterTypeException(nameof(_options.Type))
@@ -102,7 +121,7 @@ namespace RateLimiter.Storages
             var resourceName = $"RateLimiter.LuaScripts.{name}.lua";
 
             using var stream = assembly.GetManifestResourceStream(resourceName)
-                ?? throw new InvalidOperationException($"Embeded resource '{resourceName}' not found");
+                ?? throw new InvalidOperationException($"Embedded resource '{resourceName}' not found");
 
             using var reader = new StreamReader(stream);
 
@@ -113,11 +132,11 @@ namespace RateLimiter.Storages
         {
             ct.ThrowIfCancellationRequested();
 
-            var tokens = (int)await _database.ScriptEvaluateAsync(LoadLuaScript("token_bucket_refill"),
+            var tokens = (int)await _database.ScriptEvaluateAsync(_tokenBucketRefill,
                 [key],
                 [_options.Capacity,
                     _options.RefillRate,
-                    _options.Capacity!.Value / _options.RefillRate!.Value + 10]);
+                    _tokenGenerationRate]);
 
             if (tokens >= 1)
             {

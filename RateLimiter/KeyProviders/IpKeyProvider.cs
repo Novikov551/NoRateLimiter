@@ -6,15 +6,15 @@ namespace RateLimiter.KeyProviders
     {
         public string GetKey(HttpContext context)
         {
-            return GetClientIp(context) ?? "anonymus";
+            return GetClientIp(context) ?? "anonymous";
         }
 
         private string? GetClientIp(HttpContext context)
         {
-            var forwared = context.Request.Headers["X-Forwared-For"].FirstOrDefault();
-            if (!string.IsNullOrEmpty(forwared))
+            var forwarded = context.Request.Headers["X-Forwarded-For"].FirstOrDefault();
+            if (!string.IsNullOrEmpty(forwarded))
             {
-                return forwared.Split(',')[0].Trim();
+                return forwarded.Split(',')[0].Trim();
             }
 
             return context.Connection.RemoteIpAddress?.ToString();

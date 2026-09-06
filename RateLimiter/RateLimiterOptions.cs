@@ -1,4 +1,5 @@
-﻿using System.ComponentModel.DataAnnotations;
+﻿using Microsoft.AspNetCore.Http;
+using System.ComponentModel.DataAnnotations;
 
 namespace RateLimiter
 {
@@ -9,6 +10,8 @@ namespace RateLimiter
         public TimeSpan? Window { get; set; } = null;
         public int? Capacity { get; set; } = 20;
         public int? RefillRate { get; set; } = 2;
+
+        public Func<HttpContext, Task>? OnRejected { get; set; }
 
         public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
         {

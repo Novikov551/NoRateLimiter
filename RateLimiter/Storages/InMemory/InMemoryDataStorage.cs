@@ -2,11 +2,10 @@
 using Microsoft.Extensions.Logging;
 using RateLimiter.Exceptions;
 using RateLimiter.RateLimiters;
-using System.Collections.Concurrent;
 
 namespace RateLimiter.Storages.InMemory
 {
-    public class InMemoryDataStorage : IDataStorage
+    public class InMemoryDataStorage : IDataStorage, IDisposable
     {
         private readonly IMemoryCache _cache;
         private readonly ILogger<InMemoryDataStorage> _logger;
@@ -91,9 +90,12 @@ namespace RateLimiter.Storages.InMemory
                 return CreateLimiter();
             });
 
-
-
             return Task.FromResult(limiter!.TryConsume(tokens));
+        }
+
+        public void Dispose()
+        {
+           _cache.Dispose();
         }
     }
 }
