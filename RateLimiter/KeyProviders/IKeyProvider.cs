@@ -2,7 +2,7 @@
 
 namespace RateLimiter.KeyProviders
 {
-    public interface IRateLimiterKeyProvider
+    public interface IKeyProvider
     {
         string GetKey(HttpContext httpContext);
     }

@@ -2,6 +2,7 @@
 using Microsoft.Extensions.Logging;
 using RateLimiter.KeyProviders;
 using System.Text.Json;
+using System.Threading.Tasks;
 
 namespace RateLimiter
 {
@@ -9,12 +10,12 @@ namespace RateLimiter
     {
         private readonly RequestDelegate _next;
         private readonly ILogger<RateLimiterMiddleware> _logger;
-        private readonly IRateLimiterStorage _storage;
-        private readonly IRateLimiterKeyProvider _keyProvider;
+        private readonly IDataStorage _storage;
+        private readonly IKeyProvider _keyProvider;
 
         public RateLimiterMiddleware(RequestDelegate next,
-            IRateLimiterKeyProvider keyProvider,
-            IRateLimiterStorage rateLimiterStorage,
+            IKeyProvider keyProvider,
+            IDataStorage rateLimiterStorage,
             ILogger<RateLimiterMiddleware> logger)
         {
             _next = next;
@@ -26,17 +27,16 @@ namespace RateLimiter
 
         public async Task InvokeAsync(HttpContext context)
         {
-            var now = DateTime.UtcNow;
             var key = _keyProvider.GetKey(context);
 
-            if (_storage.TryConsume(key, 1))
+            if (await _storage.TryConsumeAsync(key, 1))
             {
-                SetRateLimitHeaders(context, key);
+                await SetRateLimitHeadersAsync(context, key);
                 await _next(context);
             }
             else
             {
-                SetRateLimitHeaders(context, key);
+                await SetRateLimitHeadersAsync(context, key);
                 _logger.LogWarning("Rate limit exceeded. Key: {Key}", key);
 
                 context.Response.StatusCode = StatusCodes.Status429TooManyRequests;
@@ -46,13 +46,13 @@ namespace RateLimiter
             }
         }
 
-        private void SetRateLimitHeaders(HttpContext context, string key)
+        private async Task SetRateLimitHeadersAsync(HttpContext context, string key)
         {
-            var resetTime = _storage.GetReset(key);
+            var resetTime = await _storage.GetResetAsync(key);
             var retryAfterSeconds = Math.Max(1, (int)(resetTime - DateTime.UtcNow).TotalSeconds);
 
             context.Response.Headers["X-RateLimit-Limit"] = _storage.GetLimit(key).ToString();
-            context.Response.Headers["X-RateLimit-Remaining"] = _storage.GetRemaining(key).ToString();
+            context.Response.Headers["X-RateLimit-Remaining"] = (await _storage.GetRemainingAsync(key)).ToString();
             context.Response.Headers["X-RateLimit-Reset"] = new DateTimeOffset(resetTime).ToUnixTimeSeconds().ToString();
             context.Response.Headers["Retry-After"] = retryAfterSeconds.ToString();
         }

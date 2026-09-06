@@ -1,4 +1,8 @@
-﻿using Microsoft.Extensions.DependencyInjection;
+﻿using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using RateLimiter.KeyProviders;
+using RateLimiter.Storages.InMemory;
 using System.ComponentModel.DataAnnotations;
 
 namespace RateLimiter.Extensions
@@ -24,7 +28,21 @@ namespace RateLimiter.Extensions
 
             var builder = new RateLimiterBuilder(services, options);
             services.AddSingleton(builder);
-            services.AddSingleton(options);
+
+            services.AddSingleton(sp =>
+            {
+                return new InMemoryDataStorage(options,
+                    new MemoryCacheOptions() { SizeLimit = 10_000 },
+                    new MemoryCacheEntryOptions
+                    {
+                        SlidingExpiration = TimeSpan.FromHours(1),
+                        Size = 1
+                    },
+                    sp.GetRequiredService<ILogger<InMemoryDataStorage>>());
+            });
+            services.AddSingleton<IDataStorage>(sp => sp.GetRequiredService<InMemoryDataStorage>());
+
+            services.AddSingleton<IKeyProvider, IpKeyProvider>();
 
             return builder;
         }
