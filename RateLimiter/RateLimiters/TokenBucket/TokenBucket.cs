@@ -1,6 +1,8 @@
-﻿namespace RateLimiter.RateLimiters
+﻿using System.Text.Json;
+
+namespace RateLimiter.RateLimiters.TokenBucket
 {
-    public class TokenBucket : IRateLimiter
+    public class TokenBucket : ISerializableRateLimiter
     {
         private int _tokens;
         private readonly int _refillRate;
@@ -46,22 +48,14 @@
         {
             lock (_lock)
             {
-                Refill();
                 return _tokens;
             }
-        }
-
-        public int GetLimit()
-        {
-            return _capacity;
         }
 
         public DateTime GetReset()
         {
             lock (_lock)
             {
-                Refill();
-
                 if (_tokens >= 1)
                 {
                     return DateTime.UtcNow;
@@ -69,6 +63,26 @@
 
                 var nextRefill = (1.0 - _tokens) / _refillRate;
                 return DateTime.UtcNow.AddSeconds(nextRefill);
+            }
+        }
+
+        public string Serialize()
+        {
+            lock (_lock)
+            {
+                Refill();
+
+                return JsonSerializer.Serialize(new { Tokens = _tokens, LastRefill = _lastRefill });
+            }
+        }
+
+        public void Deserialize(string state)
+        {
+            lock (_lock)
+            {
+                using var doc = JsonDocument.Parse(state);
+                _tokens = doc.RootElement.GetProperty("Tokens").GetInt32();
+                _lastRefill = doc.RootElement.GetProperty("LastRefill").GetDateTime();
             }
         }
     }

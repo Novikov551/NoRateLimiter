@@ -1,34 +1,27 @@
 ﻿using Microsoft.AspNetCore.Http;
-using Microsoft.Extensions.Logging;
+using RateLimiter.Attributes;
 using RateLimiter.KeyProviders;
-using System.Security.Cryptography;
-using System.Text;
-using System.Text.Json;
+using RateLimiter.RateLimiters;
+using RateLimiter.Storages;
 
 namespace RateLimiter
 {
     public class RateLimiterMiddleware
     {
         private readonly RequestDelegate _next;
-        private readonly ILogger<RateLimiterMiddleware> _logger;
         private readonly IDataStorage _storage;
         private readonly IKeyProvider _keyProvider;
-
-        private readonly Func<HttpContext,  Task>? _onRejected;
+        private readonly IRateLimitRejectionHandler _rejectionHandler;
 
         public RateLimiterMiddleware(RequestDelegate next,
             IKeyProvider keyProvider,
             IDataStorage rateLimiterStorage,
-            RateLimiterOptions options,
-            ILogger<RateLimiterMiddleware> logger)
+            IRateLimitRejectionHandler rejectionHandler)
         {
             _next = next;
             _keyProvider = keyProvider;
             _storage = rateLimiterStorage;
-
-            _onRejected = options.OnRejected;
-
-            _logger = logger;
+            _rejectionHandler = rejectionHandler;
         }
 
         public async Task InvokeAsync(HttpContext context)
@@ -40,7 +33,11 @@ namespace RateLimiter
                 return;
             }
 
-            var key = _keyProvider.GetKey(context);
+            var policyName = endpoint?.Metadata.GetMetadata<RateLimitPolicyAttribute>()?
+                .PolicyName ?? "default";
+
+            var clientKey = _keyProvider.GetKey(context);
+            var key = PolicyKeyHelper.BuildKey(policyName, clientKey);
 
             if (await _storage.TryConsumeAsync(key, 1))
             {
@@ -49,35 +46,25 @@ namespace RateLimiter
             }
             else
             {
-                if (_onRejected != null)
-                {
-                    await _onRejected.Invoke(context);
-                }
-                else
-                {
-                    await SetRateLimitHeadersAsync(context, key);
-
-                    _logger.LogWarning("Rate limit exceeded. Key: {Key}", Convert.ToBase64String(
-                        SHA256.HashData(
-                            Encoding.UTF8.GetBytes(key))));
-
-                    context.Response.StatusCode = StatusCodes.Status429TooManyRequests;
-                    context.Response.ContentType = "application/json";
-                    var json = JsonSerializer.Serialize(new { message = "Rate limit exceeded" });
-                    await context.Response.WriteAsync(json);
-                }
+                await SetRateLimitHeadersAsync(context, key);
+                await _rejectionHandler.HandleAsync(context);
             }
         }
 
-        private async Task SetRateLimitHeadersAsync(HttpContext context, string key)
+        #region Private
+
+        private async Task SetRateLimitHeadersAsync(HttpContext context, 
+            string key)
         {
             var resetTime = await _storage.GetResetAsync(key);
             var retryAfterSeconds = Math.Max(1, (int)(resetTime - DateTime.UtcNow).TotalSeconds);
 
-            context.Response.Headers["X-RateLimit-Limit"] = _storage.GetLimit(key).ToString();
+            context.Response.Headers["X-RateLimit-Limit"] = (await _storage.GetLimitAsync(key)).ToString();
             context.Response.Headers["X-RateLimit-Remaining"] = (await _storage.GetRemainingAsync(key)).ToString();
             context.Response.Headers["X-RateLimit-Reset"] = new DateTimeOffset(resetTime).ToUnixTimeSeconds().ToString();
             context.Response.Headers["Retry-After"] = retryAfterSeconds.ToString();
         }
+
+        #endregion
     }
 }

@@ -1,150 +1,135 @@
 ﻿using Microsoft.Extensions.Logging;
-using RateLimiter.Exceptions;
+using RateLimiter.RateLimiters;
 using StackExchange.Redis;
 
 namespace RateLimiter.Storages
 {
     public class RedisRateLimiterStorage : IDataStorage
     {
-        private readonly RateLimiterOptions _options;
         private readonly IDatabase _database;
-        private readonly string _slidingWindowGetReset;
-        private readonly string _tokenBucketRefill;
-        private readonly string _slidingWindowGetRemaining;
-        private readonly string _slidingWindowTryConsume;
-        private readonly string _tokenBucketTryConsume;
-        private readonly double? _tokenGenerationRate;
-        private readonly ILogger<RedisRateLimiterStorage> _logger;
+        private const string KeyPrefix = "ratelimiter:";
+        private const int MaxRetries = 10;
+        private readonly TimeSpan _entityTtl;
+        private readonly IRateLimiterFactory _rateLimiterFactory;
 
         public RedisRateLimiterStorage(IConnectionMultiplexer multiplexer,
-            RateLimiterOptions options,
-            ILogger<RedisRateLimiterStorage> logger,
-            int db)
+            int db,
+            IRateLimiterFactory rateLimiterFactory,
+            TimeSpan? stateTtl = null)
         {
-            _options = options;
             _database = multiplexer.GetDatabase(db);
 
-            _slidingWindowGetReset = LoadLuaScript("sliding_window_get_reset");
-            _tokenBucketRefill = LoadLuaScript("token_bucket_refill");
-            _slidingWindowGetRemaining = LoadLuaScript("sliding_window_get_remaining");
-            _slidingWindowTryConsume = LoadLuaScript("sliding_window_try_consume");
-            _tokenBucketTryConsume = LoadLuaScript("token_bucket_try_consume");
+            _rateLimiterFactory = rateLimiterFactory;
+            _entityTtl = stateTtl ?? TimeSpan.FromMinutes(10);
+        }
 
-            if (_options.Type == RateLimiterType.TokenBucket)
+        public async ValueTask<DateTime> GetResetAsync(string key, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return await ReadAsync(key, limiter => limiter.GetReset(), ct);
+        }
+
+        public ValueTask<int> GetLimitAsync(string key, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            return ValueTask.FromResult(_rateLimiterFactory
+                .GetDefaultRemaining(
+                PolicyKeyHelper.GetPolicyName(key)));
+        }
+
+
+        public async ValueTask<int> GetRemainingAsync(string key, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            return await ReadAsync(key, limiter => limiter.GetRemaining(), ct);
+        }
+
+        public async ValueTask<bool> TryConsumeAsync(string key, int tokens = 1, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            return await ExecuteAsync(key, limiter => limiter.TryConsume(tokens), ct);
+        }
+
+        #region Private 
+
+        private async ValueTask<T> ReadAsync<T>(string key,
+           Func<IRateLimiter, T> action,
+           CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            var redisKey = KeyPrefix + key;
+            var policyName = PolicyKeyHelper.GetPolicyName(key);
+
+            var state = await _database.StringGetAsync(redisKey);
+            IRateLimiter rateLimiter = state.HasValue
+                    ? RestoreLimiter(policyName, state)
+                    : _rateLimiterFactory.Create(policyName);
+
+            return action(rateLimiter);
+        }
+
+        private async ValueTask<T> ExecuteAsync<T>(string key,
+           Func<IRateLimiter, T> action,
+           CancellationToken ct = default)
+        {
+            var redisKey = KeyPrefix + key;
+            var policyName = PolicyKeyHelper.GetPolicyName(key);
+
+            for (var retry = 0; retry < MaxRetries; retry++)
             {
-                _tokenGenerationRate = (double)_options.Capacity!.Value / _options.RefillRate!.Value + 10;
+                ct.ThrowIfCancellationRequested();
+
+                await _database.ExecuteAsync("WATCH", redisKey);
+
+                var state = await _database.StringGetAsync(redisKey);
+
+                IRateLimiter rateLimiter = state.HasValue
+                    ? RestoreLimiter(policyName, state)
+                    : _rateLimiterFactory.Create(policyName);
+
+                var result = action(rateLimiter);
+
+                var serizalized = SerializeLimiter(rateLimiter);
+
+                var transaction = _database.CreateTransaction();
+                _ = transaction.StringSetAsync(redisKey, serizalized, _entityTtl);
+
+                var commited = await transaction.ExecuteAsync();
+                if (commited)
+                {
+                    return result;
+                }
             }
 
-            _logger = logger;
+            throw new RedisException("Too many concurrent modifications");
         }
 
-        public int GetLimit(string key)
+        private IRateLimiter RestoreLimiter(string policyName, string state)
         {
-            return _options.Type switch
+            var limiter = _rateLimiterFactory.Create(policyName);
+
+            if(limiter is ISerializableRateLimiter serializable)
             {
-                RateLimiterType.TokenBucket => _options.Capacity!.Value,
-                RateLimiterType.SlidingWindow => _options.RequestsLimit!.Value,
-                _ => throw new UnknownRateLimiterTypeException(nameof(_options.Type))
-            };
-        }
+                serializable.Deserialize(state);
 
-        public async Task<DateTime> GetResetAsync(string key, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            return _options.Type switch
-            {
-                RateLimiterType.TokenBucket => await GetTokenBucketResetResultAsync(key, ct),
-                RateLimiterType.SlidingWindow => await GetSlidingWindowResetResultAsync(key, ct),
-                _ => throw new UnknownRateLimiterTypeException(nameof(_options.Type))
-            };
-        }
-
-        private async Task<DateTime> GetSlidingWindowResetResultAsync(string key, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-
-            var result = (double)await _database.ScriptEvaluateAsync(_slidingWindowGetReset,
-                [key],
-                [_options.Window!.Value.TotalSeconds]);
-            return DateTime.UnixEpoch.AddSeconds(result).ToUniversalTime();
-        }
-
-        public async Task<int> GetRemainingAsync(string key, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-
-            return _options.Type switch
-            {
-                RateLimiterType.TokenBucket => (int)await _database.ScriptEvaluateAsync(_tokenBucketRefill,
-                [key],
-                [_options.Capacity,
-                    _options.RefillRate,
-                    _tokenGenerationRate]),
-
-                RateLimiterType.SlidingWindow => (int)await _database.ScriptEvaluateAsync(_slidingWindowGetRemaining,
-                [key],
-                [_options.RequestsLimit!.Value,
-                    _options.Window!.Value.TotalSeconds]),
-
-                _ => throw new UnknownRateLimiterTypeException(nameof(_options.Type))
-            };
-        }
-
-        public async Task<bool> TryConsumeAsync(string key, int tokens = 1, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-
-            return _options.Type switch
-            {
-                RateLimiterType.TokenBucket => (bool)await _database.ScriptEvaluateAsync(_tokenBucketTryConsume,
-                [key],
-                [_options.Capacity,
-                    _options.RefillRate,
-                    tokens,
-                    _tokenGenerationRate]),
-
-                RateLimiterType.SlidingWindow => (bool)await _database.ScriptEvaluateAsync(_slidingWindowTryConsume,
-                [key],
-                [_options.RequestsLimit!.Value,
-                    _options.Window!.Value.TotalSeconds,
-                    tokens]),
-
-                _ => throw new UnknownRateLimiterTypeException(nameof(_options.Type))
-            };
-        }
-
-        #region Private
-
-        private static string LoadLuaScript(string name)
-        {
-            var assembly = typeof(RedisRateLimiterStorage).Assembly;
-            var resourceName = $"RateLimiter.LuaScripts.{name}.lua";
-
-            using var stream = assembly.GetManifestResourceStream(resourceName)
-                ?? throw new InvalidOperationException($"Embedded resource '{resourceName}' not found");
-
-            using var reader = new StreamReader(stream);
-
-            return reader.ReadToEnd();
-        }
-
-        private async Task<DateTime> GetTokenBucketResetResultAsync(string key, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-
-            var tokens = (int)await _database.ScriptEvaluateAsync(_tokenBucketRefill,
-                [key],
-                [_options.Capacity,
-                    _options.RefillRate,
-                    _tokenGenerationRate]);
-
-            if (tokens >= 1)
-            {
-                return DateTime.UtcNow;
+                return limiter;
             }
 
-            var nextRefill = (1.0 - tokens) / _options.RefillRate!.Value;
-            return DateTime.UtcNow.AddSeconds(nextRefill);
+            throw new InvalidOperationException($"{limiter.GetType().Name} must implement `ISerializableRateLimiter` for saved in distributed storage.");
+        }
+
+        private static string SerializeLimiter(IRateLimiter limiter)
+        {
+            if (limiter is ISerializableRateLimiter serializable)
+            {
+                return serializable.Serialize();
+            }
+
+            throw new InvalidOperationException($"{limiter.GetType().Name} must implement `ISerializableRateLimiter` for saved in distributed storage.");
         }
 
         #endregion
