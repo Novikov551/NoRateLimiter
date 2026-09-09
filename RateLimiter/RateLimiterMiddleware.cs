@@ -6,6 +6,12 @@ using RateLimiter.Storages;
 
 namespace RateLimiter
 {
+    /// <summary>
+    /// ASP.NET Core middleware для rate limiting. Проверяет каждый запрос:
+    /// определяет политику, идентифицирует клиента, пытается потратить токен.
+    /// При успехе — устанавливает заголовки и передаёт запрос дальше.
+    /// При превышении — заголовки + делегирует ответ <see cref="IRateLimitRejectionHandler"/>.
+    /// </summary>
     public class RateLimiterMiddleware
     {
         private readonly RequestDelegate _next;

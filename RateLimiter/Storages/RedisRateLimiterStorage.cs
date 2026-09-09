@@ -1,26 +1,31 @@
-﻿using Microsoft.Extensions.Logging;
-using RateLimiter.RateLimiters;
+﻿using RateLimiter.RateLimiters;
 using StackExchange.Redis;
 
 namespace RateLimiter.Storages
 {
+    /// <summary>
+    /// Redis-хранилище состояния rate limiter'ов. Сериализует лимитеры
+    /// в JSON и сохраняет в Redis. Использует optimistic locking
+    /// (WATCH/MULTI/EXEC) для корректной работы в конкурентной среде.
+    /// Read-only операции (GetRemaining, GetReset) не обновляют TTL.
+    /// </summary>
     public class RedisRateLimiterStorage : IDataStorage
     {
         private readonly IDatabase _database;
         private const string KeyPrefix = "ratelimiter:";
-        private const int MaxRetries = 10;
+        private readonly int _maxRetries;
         private readonly TimeSpan _entityTtl;
         private readonly IRateLimiterFactory _rateLimiterFactory;
 
-        public RedisRateLimiterStorage(IConnectionMultiplexer multiplexer,
-            int db,
+        public RedisRateLimiterStorage(
+            IConnectionMultiplexer multiplexer,
             IRateLimiterFactory rateLimiterFactory,
-            TimeSpan? stateTtl = null)
+            RedisStorageOptions options)
         {
-            _database = multiplexer.GetDatabase(db);
-
+            _database = multiplexer.GetDatabase(options.Db);
             _rateLimiterFactory = rateLimiterFactory;
-            _entityTtl = stateTtl ?? TimeSpan.FromMinutes(10);
+            _maxRetries = options.MaxRetries;
+            _entityTtl = options.StateTtl ?? TimeSpan.FromMinutes(10);
         }
 
         public async ValueTask<DateTime> GetResetAsync(string key, CancellationToken ct = default)
@@ -38,7 +43,6 @@ namespace RateLimiter.Storages
                 PolicyKeyHelper.GetPolicyName(key)));
         }
 
-
         public async ValueTask<int> GetRemainingAsync(string key, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
@@ -53,7 +57,7 @@ namespace RateLimiter.Storages
             return await ExecuteAsync(key, limiter => limiter.TryConsume(tokens), ct);
         }
 
-        #region Private 
+        #region Private
 
         private async ValueTask<T> ReadAsync<T>(string key,
            Func<IRateLimiter, T> action,
@@ -66,7 +70,7 @@ namespace RateLimiter.Storages
 
             var state = await _database.StringGetAsync(redisKey);
             IRateLimiter rateLimiter = state.HasValue
-                    ? RestoreLimiter(policyName, state)
+                    ? RestoreLimiter(policyName, state!)
                     : _rateLimiterFactory.Create(policyName);
 
             return action(rateLimiter);
@@ -79,7 +83,7 @@ namespace RateLimiter.Storages
             var redisKey = KeyPrefix + key;
             var policyName = PolicyKeyHelper.GetPolicyName(key);
 
-            for (var retry = 0; retry < MaxRetries; retry++)
+            for (var retry = 0; retry < _maxRetries; retry++)
             {
                 ct.ThrowIfCancellationRequested();
 
@@ -88,18 +92,18 @@ namespace RateLimiter.Storages
                 var state = await _database.StringGetAsync(redisKey);
 
                 IRateLimiter rateLimiter = state.HasValue
-                    ? RestoreLimiter(policyName, state)
+                    ? RestoreLimiter(policyName, state!)
                     : _rateLimiterFactory.Create(policyName);
 
                 var result = action(rateLimiter);
 
-                var serizalized = SerializeLimiter(rateLimiter);
+                var serialized = SerializeLimiter(rateLimiter);
 
                 var transaction = _database.CreateTransaction();
-                _ = transaction.StringSetAsync(redisKey, serizalized, _entityTtl);
+                _ = transaction.StringSetAsync(redisKey, serialized, _entityTtl);
 
-                var commited = await transaction.ExecuteAsync();
-                if (commited)
+                var committed = await transaction.ExecuteAsync();
+                if (committed)
                 {
                     return result;
                 }
@@ -112,14 +116,16 @@ namespace RateLimiter.Storages
         {
             var limiter = _rateLimiterFactory.Create(policyName);
 
-            if(limiter is ISerializableRateLimiter serializable)
+            if (limiter is ISerializableRateLimiter serializable)
             {
                 serializable.Deserialize(state);
 
                 return limiter;
             }
 
-            throw new InvalidOperationException($"{limiter.GetType().Name} must implement `ISerializableRateLimiter` for saved in distributed storage.");
+            throw new InvalidOperationException(
+                $"{limiter.GetType().Name} must implement " +
+                $"{nameof(ISerializableRateLimiter)} for distributed storage.");
         }
 
         private static string SerializeLimiter(IRateLimiter limiter)
@@ -129,7 +135,9 @@ namespace RateLimiter.Storages
                 return serializable.Serialize();
             }
 
-            throw new InvalidOperationException($"{limiter.GetType().Name} must implement `ISerializableRateLimiter` for saved in distributed storage.");
+            throw new InvalidOperationException(
+                $"{limiter.GetType().Name} must implement " +
+                $"{nameof(ISerializableRateLimiter)} for distributed storage.");
         }
 
         #endregion

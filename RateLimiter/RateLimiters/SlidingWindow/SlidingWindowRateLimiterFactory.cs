@@ -1,10 +1,11 @@
 ﻿namespace RateLimiter.RateLimiters.SlidingWindow
 {
+    /// <summary>
+    /// Фабрика для алгоритма Sliding Window. Создаёт <see cref="SlidingWindow"/>
+    /// из <see cref="SlidingWindowRateLimiterPolicy"/>.
+    /// </summary>
     public class SlidingWindowRateLimiterFactory : IAlgorithmRateLimiterFactory
     {
-        public SlidingWindowRateLimiterFactory()
-        {
-        }
 
         public AlgorithmType Algorithm => AlgorithmType.SlidingWindow;
 

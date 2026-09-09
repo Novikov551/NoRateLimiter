@@ -2,6 +2,11 @@
 
 namespace RateLimiter.RateLimiters.SlidingWindow
 {
+    /// <summary>
+    /// Реализация алгоритма Sliding Window. Хранит метки времени запросов
+    /// и удаляет устаревшие при каждой проверке. Потокобезопасен (lock).
+    /// Поддерживает сериализацию для распределённых хранилищ.
+    /// </summary>
     public class SlidingWindow : ISerializableRateLimiter
     {
         private readonly TimeSpan _window;

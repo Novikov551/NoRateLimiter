@@ -1,10 +1,11 @@
 ﻿namespace RateLimiter.RateLimiters.TokenBucket
 {
+    /// <summary>
+    /// Фабрика для алгоритма Token Bucket. Создаёт <see cref="TokenBucket"/>
+    /// из <see cref="TokenBucketRateLimiterPolicy"/>.
+    /// </summary>
     public class TokenBucketRateLimiterFactory : IAlgorithmRateLimiterFactory
     {
-        public TokenBucketRateLimiterFactory()
-        {
-        }
 
         public AlgorithmType Algorithm => AlgorithmType.TokenBucket;
 

@@ -2,6 +2,11 @@
 
 namespace RateLimiter.KeyProviders
 {
+    /// <summary>
+    /// Идентифицирует клиента по IP-адресу. Проверяет заголовок
+    /// X-Forwarded-For (первый адрес из цепочки прокси), затем
+    /// Connection.RemoteIpAddress. Если оба отсутствуют — "anonymous".
+    /// </summary>
     public class IpKeyProvider : IKeyProvider
     {
         public string GetKey(HttpContext context)

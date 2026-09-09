@@ -2,6 +2,11 @@
 
 namespace RateLimiter.RateLimiters.TokenBucket
 {
+    /// <summary>
+    /// Реализация алгоритма Token Bucket. Ведро с токенами, пополняемое
+    /// с заданной скоростью. Потокобезопасен (lock).
+    /// Поддерживает сериализацию для распределённых хранилищ.
+    /// </summary>
     public class TokenBucket : ISerializableRateLimiter
     {
         private int _tokens;

@@ -182,7 +182,7 @@ Redis решает эту проблему — все инстансы чита�
 └──────────────────────────────────────┘
 ```
 
-Для защиты от race condition используется **optimistic locking** (WATCH/MULTI/EXEC). Если между WATCH и EXEC другой инстанс изменил ключ, транзакция откатывается и выполняется повторно (до 10 попыток).
+Для защиты от race condition используется **optimistic locking** (WATCH/MULTI/EXEC). Если между WATCH и EXEC другой инстанс изменил ключ, транзакция откатывается и выполняется повторно (по умолчанию до 10 попыток, настраивается через `RedisStorageOptions.MaxRetries`).
 
 ```
 Instance A                    Redis                     Instance B
@@ -346,11 +346,18 @@ builder.Services.AddRateLimiter(options => { ... })
 #### Способ 1: строка подключения
 
 ```csharp
+// Дефолтные настройки хранилища
 builder.Services.AddRateLimiter(options => { ... })
     .UseRedis("localhost:6379");
 
+// С настройкой хранилища
 builder.Services.AddRateLimiter(options => { ... })
-    .UseRedis("localhost:6379", db: 5);   // номер БД
+    .UseRedis("localhost:6379", redis =>
+    {
+        redis.Db = 3;
+        redis.StateTtl = TimeSpan.FromMinutes(30);
+        redis.MaxRetries = 5;
+    });
 ```
 
 #### Способ 2: Action<ConfigurationOptions>
@@ -368,7 +375,13 @@ builder.Services.AddRateLimiter(options => { ... })
         config.AbortOnConnectFail = false;
         config.ConnectTimeout = 5000;
         config.SyncTimeout = 3000;
-    }, db: 0);
+    },
+    redis =>
+    {
+        redis.Db = 0;
+        redis.StateTtl = TimeSpan.FromMinutes(15);
+        redis.MaxRetries = 10;
+    });
 ```
 
 #### Способ 3: существующий IConnectionMultiplexer
@@ -379,7 +392,11 @@ builder.Services.AddRateLimiter(options => { ... })
 var multiplexer = ConnectionMultiplexer.Connect("localhost:6379");
 
 builder.Services.AddRateLimiter(options => { ... })
-    .UseRedis(multiplexer);
+    .UseRedis(multiplexer, redis =>
+    {
+        redis.Db = 5;
+        redis.StateTtl = TimeSpan.FromHours(1);
+    });
 ```
 
 Или если `IConnectionMultiplexer` уже в DI:
@@ -395,12 +412,23 @@ builder.Services.AddRateLimiter(options => { ... })
 
 #### Параметры Redis-хранилища
 
+Настраиваются через `Action<RedisStorageOptions>` во всех перегрузках `UseRedis`:
+
 | Параметр | Значение по умолчанию | Описание |
 |----------|----------------------|----------|
-| `db` | 0 | Номер Redis БД |
-| `stateTtl` | 10 минут | TTL записи в Redis |
-| `MaxRetries` | 10 | Максимум попыток optimistic locking |
-| `KeyPrefix` | `ratelimiter:` | Префикс всех ключей |
+| `Db` | 0 | Номер Redis БД |
+| `StateTtl` | 10 минут | TTL записи в Redis (обновляется при `TryConsume`) |
+| `MaxRetries` | 10 | Максимум попыток optimistic locking перед броском `RedisException` |
+
+```csharp
+builder.Services.AddRateLimiter(options => { ... })
+    .UseRedis("localhost:6379", redis =>
+    {
+        redis.Db = 0;
+        redis.StateTtl = TimeSpan.FromMinutes(30);
+        redis.MaxRetries = 5;
+    });
+```
 
 #### Что хранится в Redis
 
@@ -707,7 +735,13 @@ builder.Services.AddRateLimiter(options =>
 {
     config.EndPoints.Add("localhost:6379");
     config.AbortOnConnectFail = false;
-}, db: 0)
+},
+redis =>
+{
+    redis.Db = 0;
+    redis.StateTtl = TimeSpan.FromMinutes(15);
+    redis.MaxRetries = 10;
+})
 .UseRejectionHandler<ProblemDetailsHandler>()
 .UseKeyProvider<ClaimsKeyProvider>();
 
@@ -747,3 +781,7 @@ public IActionResult Health() => Ok();
 ## Лицензия
 
 MIT
+
+---
+
+> **Примечание:** XML summary-документация в исходном коде сгенерирована нейросетью. Описания могут содержать неточности.

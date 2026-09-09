@@ -1,5 +1,9 @@
 ﻿namespace RateLimiter.RateLimiters
 {
+    /// <summary>
+    /// Формирует ключи для хранилища в формате <c>{policyName}:{clientKey}</c>
+    /// и извлекает имя политики из ключа.
+    /// </summary>
     public static class PolicyKeyHelper
     {
         private const char Separator = ':';

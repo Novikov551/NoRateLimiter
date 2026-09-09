@@ -4,6 +4,12 @@ using RateLimiter.RateLimiters;
 
 namespace RateLimiter.Storages
 {
+    /// <summary>
+    /// InMemory хранилище на основе <see cref="IMemoryCache"/>.
+    /// Лимитеры создаются при первом запросе и хранятся в кэше
+    /// с настраиваемым TTL. При удалении из кэша клиент получает
+    /// полный лимит заново.
+    /// </summary>
     public class InMemoryDataStorage : IDataStorage, IDisposable
     {
         private readonly IMemoryCache _cache;

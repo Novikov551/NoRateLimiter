@@ -36,6 +36,13 @@ namespace RateLimiter.Extensions
             return options;
         }
 
+        /// <summary>
+        /// Зарегистрировать политику Sliding Window. Валидирует параметры
+        /// (RequestsLimit > 0, Window > 0).
+        /// Бросает <see cref="ArgumentException"/> при невалидных значениях.
+        /// </summary>
+        /// <param name="name">Уникальное имя политики. Используется в <see cref="Attributes.RateLimitPolicyAttribute"/>.</param>
+        /// <param name="configure">Делегат для настройки параметров алгоритма.</param>
         public static RateLimiterOptions AddSlidingWindowLimiter(this RateLimiterOptions options,
            string name,
            Action<SlidingWindowRateLimiterPolicy> configure)

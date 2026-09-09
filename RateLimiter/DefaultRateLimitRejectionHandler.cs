@@ -4,6 +4,10 @@ using System.Text.Json;
 
 namespace RateLimiter
 {
+    /// <summary>
+    /// Дефолтный обработчик 429. Логирует превышение лимита и возвращает
+    /// JSON: <c>{"message":"Rate limit exceeded."}</c>.
+    /// </summary>
     public sealed class DefaultRateLimitRejectionHandler : IRateLimitRejectionHandler
     {
         private readonly ILogger<DefaultRateLimitRejectionHandler> _logger;

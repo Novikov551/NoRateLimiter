@@ -1,5 +1,10 @@
 ﻿namespace RateLimiter.RateLimiters
 {
+    /// <summary>
+    /// Ведущая фабрика лимитеров. Хранит словарь <see cref="IAlgorithmRateLimiterFactory"/>
+    /// по <see cref="AlgorithmType"/> и делегирует создание нужной фабрике
+    /// на основе политики. Storage работает только с этим классом.
+    /// </summary>
     public class CompositeRateLimiterFactory : IRateLimiterFactory
     {
         private readonly Dictionary<AlgorithmType, IAlgorithmRateLimiterFactory> _factories;
