@@ -9,6 +9,6 @@ namespace RateLimiter
     /// </summary>
     public class RateLimiterOptions
     {
-        internal Dictionary<string, RateLimiterPolicy> Policies { get; set; } = new Dictionary<string, RateLimiterPolicy>();
+        public Dictionary<string, RateLimiterPolicy> Policies { get; set; } = new Dictionary<string, RateLimiterPolicy>();
     }
 }

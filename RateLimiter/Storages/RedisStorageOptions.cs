@@ -1,4 +1,4 @@
-namespace RateLimiter.Storages
+﻿namespace RateLimiter.Storages
 {
     /// <summary>
     /// Настройки Redis-хранилища для rate limiter.
@@ -6,7 +6,7 @@ namespace RateLimiter.Storages
     public class RedisStorageOptions
     {
         /// <summary>
-        /// Номер Redis БД. По умолчанию 0.
+        /// Номер RediNfr?s БД. По умолчанию 0.
         /// </summary>
         public int Db { get; set; }
 
