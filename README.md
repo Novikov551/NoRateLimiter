@@ -1,57 +1,57 @@
 ﻿# RateLimiter
 
-Middleware для ограничения частоты HTTP-запросов в ASP.NET Core.
+HTTP request rate limiting middleware for ASP.NET Core.
 
-## Содержание
+## Table of Contents
 
-- [Обзор](#обзор)
-- [Архитектура](#архитектура)
-  - [Обработка запроса](#обработка-запроса)
-  - [Хранение состояния](#хранение-состояния)
-  - [Multi-instance с Redis](#multi-instance-с-redis)
-- [Подключение](#подключение)
-- [Алгоритмы](#алгоритмы)
+- [Overview](#overview)
+- [Architecture](#architecture)
+  - [Request Processing](#request-processing)
+  - [State Storage](#state-storage)
+  - [Multi-instance with Redis](#multi-instance-with-redis)
+- [Getting Started](#getting-started)
+- [Algorithms](#algorithms)
   - [Token Bucket](#token-bucket)
   - [Sliding Window](#sliding-window)
-- [Политики](#политики)
-- [Хранилища](#хранилища)
+- [Policies](#policies)
+- [Storage Providers](#storage-providers)
   - [InMemory](#inmemory)
   - [Redis](#redis)
-- [Идентификация клиента](#идентификация-клиента)
-- [Обработка 429](#обработка-429)
-- [HTTP-заголовки](#http-заголовки)
-- [Атрибуты](#атрибуты)
-- [Расширение](#расширение)
-  - [Свой алгоритм](#свой-алгоритм)
-  - [Своё хранилище](#своё-хранилище)
-  - [Свой обработчик 429](#свой-обработчик-429)
-  - [Свой идентификатор клиента](#свой-идентификатор-клиента)
-- [Полный пример](#полный-пример)
-- [Зависимости](#зависимости)
+- [Client Identification](#client-identification)
+- [Handling 429](#handling-429)
+- [HTTP Headers](#http-headers)
+- [Attributes](#attributes)
+- [Extensibility](#extensibility)
+  - [Custom Algorithm](#custom-algorithm)
+  - [Custom Storage](#custom-storage)
+  - [Custom 429 Handler](#custom-429-handler)
+  - [Custom Client Identifier](#custom-client-identifier)
+- [Full Example](#full-example)
+- [Dependencies](#dependencies)
 
 ---
 
-## Обзор
+## Overview
 
-Библиотека предоставляет middleware, который проверяет каждый входящий HTTP-запрос и решает — пропустить или отклонить с кодом 429.
+A middleware library that inspects each incoming HTTP request and decides whether to allow it or reject it with a 429 status code.
 
-Два встроенных алгоритма:
-- **Token Bucket** — ведро с токенами, пополняемое с заданной скоростью
-- **Sliding Window** — скользящее окно с подсчётом запросов
+Two built-in algorithms:
+- **Token Bucket** — a bucket of tokens that refills at a configured rate
+- **Sliding Window** — a sliding time window that counts requests
 
-Два типа хранилищ:
-- **InMemory** — для одиночных инстансов
-- **Redis** — для распределённых развёртываний
+Two storage types:
+- **InMemory** — for single-instance deployments
+- **Redis** — for distributed deployments
 
-Каждый из этих компонентов можно заменить на собственную реализацию через DI.
+Every component can be replaced with a custom implementation via DI.
 
 ---
 
-## Архитектура
+## Architecture
 
-### Обработка запроса
+### Request Processing
 
-Каждый HTTP-запрос проходит через middleware в следующем порядке:
+Every HTTP request passes through the middleware in the following order:
 
 ```
 HTTP Request
@@ -59,27 +59,27 @@ HTTP Request
     ▼
 ┌───────────────────────────────┐
 │  1. SkipRateLimiting?         │
-│     Да → пропустить запрос    │
-│     Нет → продолжить          │
+│     Yes → pass through        │
+│     No → continue             │
 └───────────────┬───────────────┘
                 │
                 ▼
 ┌───────────────────────────────┐
-│  2. Определить политику       │
+│  2. Resolve policy            │
 │     [RateLimitPolicy("x")]    │
-│     → если нет → "default"    │
+│     → if none → "default"     │
 └───────────────┬───────────────┘
                 │
                 ▼
 ┌───────────────────────────────┐
-│  3. Получить ключ клиента     │
+│  3. Get client key            │
 │     IKeyProvider.GetKey()     │
 │     → IP / claims / custom    │
 └───────────────┬───────────────┘
                 │
                 ▼
 ┌───────────────────────────────┐
-│  4. Сформировать storage key  │
+│  4. Build storage key         │
 │     "{policyName}:{clientKey}"│
 └───────────────┬───────────────┘
                 │
@@ -88,30 +88,31 @@ HTTP Request
 │  5. IDataStorage              │
 │     .TryConsumeAsync(key)     │
 │                               │
-│  Лимитер существует?          │
-│  Нет → создать через          │
+│  Limiter exists?              │
+│  No → create via              │
 │       IRateLimiterFactory     │
-│  Да → попытаться потратить    │
-│       токен/запрос            │
+│  Yes → try to consume         │
+│       token/request           │
 └───────────────┬───────────────┘
                 │
         ┌───────┴───────┐
         ▼               ▼
     ┌──────────┐     ┌──────────┐
-    │Успех     │     │Отклонён  │
+    │Allowed   │     │Rejected  │
     │          │     │          │
-    │Заголов-  │     │Заголовки │
-    │ки        │     │          │
-    │          │     │429 через │
-    │→ next    │     │IRateLimit│
-    │middleware│     │Rejection │
+    │Set       │     │Set       │
+    │headers   │     │headers   │
+    │          │     │          │
+    │→ next    │     │429 via   │
+    │middleware│     │IRateLimit│
+    │          │     │Rejection │
     │          │     │Handler   │
     └──────────┘     └──────────┘
 ```
 
-### Хранение состояния
+### State Storage
 
-Лимитер создаётся при первом запросе от клиента по данной политике и хранится в хранилище.
+A limiter is created on the first request from a client for a given policy and stored in the storage provider.
 
 ```
 InMemory:
@@ -128,9 +129,9 @@ InMemory:
 │                        requests=[10:29, 10:31]│
 │                        TTL=1h (sliding)       │
 │                                               │
-│  SizeLimit: 10 000 записей                    │
-│  При удалении записи → следующий запрос       │
-│  получает полный лимит заново                 │
+│  SizeLimit: 10,000 entries                    │
+│  When evicted → next request gets             │
+│  full limit reset                             │
 └───────────────────────────────────────────────┘
 
 
@@ -141,23 +142,23 @@ Redis:
 │                                              │
 │  KEY "ratelimiter:api:192.168.1.1"           │
 │  VALUE '{"Tokens":73,"LastRefill":"..."}'    │
-│  TTL 10 минут                                │
+│  TTL 10 minutes                              │
 │                                              │
 │  KEY "ratelimiter:strict:10.0.0.5"           │
 │  VALUE '{"Requests":["...","..."]}'          │
-│  TTL 10 минут                                │
+│  TTL 10 minutes                              │
 │                                              │
-│  Записи обновляются только при TryConsume.   │
-│  GetRemaining/GetReset — read-only,          │
-│  не продлевают TTL.                          │
+│  Entries are updated only on TryConsume.     │
+│  GetRemaining/GetReset are read-only         │
+│  and do not extend TTL.                      │
 └──────────────────────────────────────────────┘
 ```
 
-### Multi-instance с Redis
+### Multi-instance with Redis
 
-При нескольких инстансах приложения за load balancer'ом InMemory не подходит — каждый инстанс хранит своё состояние, и клиент с IP 1.2.3.4 может получить 100 токенов на инстансе A и ещё 100 на инстансе B.
+With multiple application instances behind a load balancer, InMemory won't work — each instance maintains its own state, so a client with IP 1.2.3.4 could get 100 tokens on instance A and another 100 on instance B.
 
-Redis решает эту проблему — все инстансы читают и пишут в одну и ту же запись:
+Redis solves this — all instances read and write to the same entry:
 
 ```
 ┌─────────────┐     ┌─────────────┐
@@ -177,12 +178,12 @@ Redis решает эту проблему — все инстансы чита�
 │  Redis                               │
 │                                      │
 │  "ratelimiter:api:1.2.3.4"           │
-│  → одно состояние, оба инстанса      │
-│    видят одни и те же токены         │
+│  → single state, both instances      │
+│    see the same tokens               │
 └──────────────────────────────────────┘
 ```
 
-Для защиты от race condition используется **optimistic locking** (WATCH/MULTI/EXEC). Если между WATCH и EXEC другой инстанс изменил ключ, транзакция откатывается и выполняется повторно (по умолчанию до 10 попыток, настраивается через `RedisStorageOptions.MaxRetries`).
+Race conditions are prevented using **optimistic locking** (WATCH/MULTI/EXEC). If another instance modifies the key between WATCH and EXEC, the transaction is rolled back and retried (up to 10 attempts by default, configurable via `RedisStorageOptions.MaxRetries`).
 
 ```
 Instance A                    Redis                     Instance B
@@ -190,12 +191,12 @@ Instance A                    Redis                     Instance B
     │── WATCH key ──────────────│                           │
     │── GET key ────────────────│                           │
     │                           │                           │
-    │  десериализация           │       WATCH key ──────────│
-    │  consume токена           │       GET key ────────────│
-    │  сериализация             │                           │
-    │                           │       десериализация      │
-    │── MULTI ──────────────────│       consume токена      │
-    │── SET new_state ──────────│       сериализация        │
+    │  deserialize              │       WATCH key ──────────│
+    │  consume token            │       GET key ────────────│
+    │  serialize                │                           │
+    │                           │       deserialize         │
+    │── MULTI ──────────────────│       consume token       │
+    │── SET new_state ──────────│       serialize           │
     │── EXEC ───────────────────│                           │
     │                           │       MULTI ──────────────│
     │   OK, committed           │       SET new_state ──────│
@@ -207,7 +208,7 @@ Instance A                    Redis                     Instance B
 
 ---
 
-## Подключение
+## Getting Started
 
 ```csharp
 // Program.cs
@@ -225,20 +226,20 @@ builder.Services.AddRateLimiter(options =>
 
 var app = builder.Build();
 
-app.UseRateLimiter();   // ← зарегистрировать после UseRouting(), перед MapControllers()
+app.UseRateLimiter();   // ← register after UseRouting(), before MapControllers()
 app.MapControllers();
 app.Run();
 ```
 
-`AddRateLimiter` выбросит `InvalidOperationException` если не зарегистрировано ни одной политики.
+`AddRateLimiter` throws `InvalidOperationException` if no policies are registered.
 
 ---
 
-## Алгоритмы
+## Algorithms
 
 ### Token Bucket
 
-Каждому клиенту выдаётся пул токенов. При запросе расходуется один токен. Если токенов нет — 429. Токены пополняются непрерывно.
+Each client is given a pool of tokens. Each request consumes one token. If no tokens are available — 429. Tokens refill continuously.
 
 ```csharp
 options.AddTokenBucketLimiter("api", tb =>
@@ -249,24 +250,24 @@ options.AddTokenBucketLimiter("api", tb =>
 });
 ```
 
-| Параметр | Тип | Описание | Ограничение |
-|----------|-----|----------|-------------|
-| `TokenLimit` | `int` | Максимальная ёмкость ведра | > 0 |
-| `TokensPerPeriod` | `int` | Токенов, добавляемых за один `ReplenishmentPeriod` | > 0 |
-| `ReplenishmentPeriod` | `TimeSpan` | Интервал пополнения | > 0 |
+| Parameter | Type | Description | Constraint |
+|-----------|------|-------------|------------|
+| `TokenLimit` | `int` | Maximum bucket capacity | > 0 |
+| `TokensPerPeriod` | `int` | Tokens added per `ReplenishmentPeriod` | > 0 |
+| `ReplenishmentPeriod` | `TimeSpan` | Refill interval | > 0 |
 
-**Пример:** `TokenLimit=100, TokensPerPeriod=10, ReplenishmentPeriod=1с` — ведро вмещает 100 токенов, пополняется по 10 токенов в секунду. При полном ведре клиент может сделать 100 запросов подряд, потом по 10 запросов в секунду.
+**Example:** `TokenLimit=100, TokensPerPeriod=10, ReplenishmentPeriod=1s` — the bucket holds 100 tokens, refills at 10 tokens per second. With a full bucket the client can make 100 requests in a burst, then 10 requests per second.
 
-**Особенности:**
-- Пополнение происходит при каждом вызове `TryConsume` на основе прошедшего времени
-- Токены целочисленные — дробные токены отбрасываются
-- Емкость никогда не превышает `TokenLimit`
+**Behavior:**
+- Refill happens on each `TryConsume` call based on elapsed time
+- Tokens are integer — fractional tokens are truncated
+- Capacity never exceeds `TokenLimit`
 
 ---
 
 ### Sliding Window
 
-Каждый запрос фиксируется с временной меткой. При проверке все метки старше `Window` удаляются. Если оставшихся меток >= `RequestsLimit` — 429.
+Each request is recorded with a timestamp. On each check, all timestamps older than `Window` are removed. If remaining timestamps >= `RequestsLimit` — 429.
 
 ```csharp
 options.AddSlidingWindowLimiter("strict", sw =>
@@ -276,46 +277,46 @@ options.AddSlidingWindowLimiter("strict", sw =>
 });
 ```
 
-| Параметр | Тип | Описание | Ограничение |
-|----------|-----|----------|-------------|
-| `RequestsLimit` | `int` | Максимум запросов в окне | > 0 |
-| `Window` | `TimeSpan` | Длительность окна | > 0 |
+| Parameter | Type | Description | Constraint |
+|-----------|------|-------------|------------|
+| `RequestsLimit` | `int` | Maximum requests in the window | > 0 |
+| `Window` | `TimeSpan` | Window duration | > 0 |
 
-**Пример:** `RequestsLimit=200, Window=1мин` — не более 200 запросов в минуту.
+**Example:** `RequestsLimit=200, Window=1min` — no more than 200 requests per minute.
 
-**Особенности:**
-- Окно скользящее — нет «тактов», границ нет
-- Старые метки удаляются лениво, при следующем запросе
-- `GetReset()` возвращает время, когда самый старый запрос «выпадет» из окна
+**Behavior:**
+- The window is truly sliding — no fixed ticks or boundaries
+- Old timestamps are lazily removed on the next request
+- `GetReset()` returns the time when the oldest request will fall out of the window
 
 ---
 
-## Политики
+## Policies
 
-Политика — именованная конфигурация лимита. Каждая политика связана с одним алгоритмом.
+A policy is a named rate limit configuration. Each policy is bound to one algorithm.
 
 ```csharp
-options.AddTokenBucketLimiter("api", tb => { ... });       // политика "api" → Token Bucket
-options.AddSlidingWindowLimiter("strict", sw => { ... });   // политика "strict" → Sliding Window
+options.AddTokenBucketLimiter("api", tb => { ... });       // policy "api" → Token Bucket
+options.AddSlidingWindowLimiter("strict", sw => { ... });   // policy "strict" → Sliding Window
 ```
 
-Одно приложение может иметь несколько политик с разными алгоритмами и параметрами. Каждый эндпоинт использует свою политику через `[RateLimitPolicy("name")]`.
+A single application can have multiple policies with different algorithms and parameters. Each endpoint uses its policy via `[RateLimitPolicy("name")]`.
 
-Если атрибут не указан — используется политика `"default"`. Если политика `"default"` не зарегистрирована — `InvalidOperationException` при первом запросе к такому эндпоинту.
+If no attribute is specified, the `"default"` policy is used. If the `"default"` policy is not registered, `InvalidOperationException` is thrown on the first request to that endpoint.
 
 ---
 
-## Хранилища
+## Storage Providers
 
 ### InMemory
 
-Регистрируется по умолчанию. Состояние лимитеров хранится в `IMemoryCache`.
+Registered by default. Limiter state is stored in `IMemoryCache`.
 
 ```csharp
-// значения по умолчанию
+// default settings
 builder.Services.AddRateLimiter(options => { ... });
 
-// с настройкой
+// custom settings
 builder.Services.AddRateLimiter(options => { ... })
     .UseInMemoryStorage(
         cacheOptions =>
@@ -329,28 +330,28 @@ builder.Services.AddRateLimiter(options => { ... })
         });
 ```
 
-| Параметр | Значение по умолчанию | Описание |
-|----------|----------------------|----------|
-| `SizeLimit` | 10 000 | Максимум записей в кэше |
-| `SlidingExpiration` | 1 час | TTL записи (сбрасывается при каждом обращении) |
-| `Size` | 1 | Размер одной записи в единицах кэша |
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `SizeLimit` | 10,000 | Maximum cache entries |
+| `SlidingExpiration` | 1 hour | Entry TTL (reset on each access) |
+| `Size` | 1 | Entry size in cache units |
 
-При переполнении кэша записи удаляются по LRU. Удалённая запись = клиент получает полный лимит заново.
+When the cache is full, entries are evicted by LRU. Evicted entry = the client gets a full limit reset.
 
 ---
 
 ### Redis
 
-Состояние лимитеров хранится в Redis. Сериализуется в JSON.
+Limiter state is stored in Redis. Serialized as JSON.
 
-#### Способ 1: строка подключения
+#### Option 1: Connection string
 
 ```csharp
-// Дефолтные настройки хранилища
+// Default storage settings
 builder.Services.AddRateLimiter(options => { ... })
     .UseRedis("localhost:6379");
 
-// С настройкой хранилища
+// Custom storage settings
 builder.Services.AddRateLimiter(options => { ... })
     .UseRedis("localhost:6379", redis =>
     {
@@ -360,9 +361,9 @@ builder.Services.AddRateLimiter(options => { ... })
     });
 ```
 
-#### Способ 2: Action<ConfigurationOptions>
+#### Option 2: Action<ConfigurationOptions>
 
-Для полного контроля над настройками подключения — пароли, SSL, таймауты, sentinel, cluster:
+For full control over connection settings — passwords, SSL, timeouts, sentinel, cluster:
 
 ```csharp
 builder.Services.AddRateLimiter(options => { ... })
@@ -384,9 +385,9 @@ builder.Services.AddRateLimiter(options => { ... })
     });
 ```
 
-#### Способ 3: существующий IConnectionMultiplexer
+#### Option 3: Existing IConnectionMultiplexer
 
-Если подключение к Redis уже зарегистровано в DI другим пакетом:
+If the Redis connection is already registered in DI by another package:
 
 ```csharp
 var multiplexer = ConnectionMultiplexer.Connect("localhost:6379");
@@ -399,26 +400,26 @@ builder.Services.AddRateLimiter(options => { ... })
     });
 ```
 
-Или если `IConnectionMultiplexer` уже в DI:
+Or if `IConnectionMultiplexer` is already in DI:
 
 ```csharp
-// RateLimiter найдёт существующий IConnectionMultiplexer автоматически
+// RateLimiter will find the existing IConnectionMultiplexer automatically
 builder.Services.AddSingleton<IConnectionMultiplexer>(sp =>
     ConnectionMultiplexer.Connect("localhost:6379"));
 
 builder.Services.AddRateLimiter(options => { ... })
-    .UseRedis("localhost:6379");  // не создаст дубликат
+    .UseRedis("localhost:6379");  // won't create a duplicate
 ```
 
-#### Параметры Redis-хранилища
+#### Redis Storage Options
 
-Настраиваются через `Action<RedisStorageOptions>` во всех перегрузках `UseRedis`:
+Configured via `Action<RedisStorageOptions>` in all `UseRedis` overloads:
 
-| Параметр | Значение по умолчанию | Описание |
-|----------|----------------------|----------|
-| `Db` | 0 | Номер Redis БД |
-| `StateTtl` | 10 минут | TTL записи в Redis (обновляется при `TryConsume`) |
-| `MaxRetries` | 10 | Максимум попыток optimistic locking перед броском `RedisException` |
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `Db` | 0 | Redis database number |
+| `StateTtl` | 10 minutes | Entry TTL in Redis (updated on `TryConsume`) |
+| `MaxRetries` | 10 | Maximum optimistic lock retries before throwing `RedisException` |
 
 ```csharp
 builder.Services.AddRateLimiter(options => { ... })
@@ -430,11 +431,11 @@ builder.Services.AddRateLimiter(options => { ... })
     });
 ```
 
-#### Что хранится в Redis
+#### What's stored in Redis
 
-Ключ: `ratelimiter:{policyName}:{clientKey}`
+Key: `ratelimiter:{policyName}:{clientKey}`
 
-Значение — JSON:
+Value — JSON:
 
 ```
 // Token Bucket
@@ -444,31 +445,31 @@ builder.Services.AddRateLimiter(options => { ... })
 {"Requests":["2026-09-09T10:29:00Z","2026-09-09T10:29:15Z"]}
 ```
 
-#### Какие операции пишут, какие читают
+#### Read vs. Write operations
 
-| Операция | Redis | Влияние на TTL |
-|----------|-------|---------------|
-| `TryConsumeAsync` | WATCH → GET → modify → MULTI → SET → EXEC | Обновляет TTL |
-| `GetRemainingAsync` | GET (read-only) | Не трогает TTL |
-| `GetLimitAsync` | Из фабрики (не лезет в Redis) | Не трогает TTL |
-| `GetResetAsync` | GET (read-only) | Не трогает TTL |
+| Operation | Redis | TTL Impact |
+|-----------|-------|-----------|
+| `TryConsumeAsync` | WATCH → GET → modify → MULTI → SET → EXEC | Extends TTL |
+| `GetRemainingAsync` | GET (read-only) | No TTL change |
+| `GetLimitAsync` | From factory (no Redis call) | No TTL change |
+| `GetResetAsync` | GET (read-only) | No TTL change |
 
 ---
 
-## Идентификация клиента
+## Client Identification
 
-По умолчанию — по IP-адресу через `IpKeyProvider`:
+By default — by IP address via `IpKeyProvider`:
 
-1. Проверяет заголовок `X-Forwarded-For` (первый адрес из цепочки прокси)
-2. Если нет — берёт `Connection.RemoteIpAddress`
-3. Если и этого нет — `"anonymous"`
+1. Checks the `X-Forwarded-For` header (first address from the proxy chain)
+2. If not present — uses `Connection.RemoteIpAddress`
+3. If neither exists — `"anonymous"`
 
-> **Важно:** `IpKeyProvider` доверяет заголовку `X-Forwarded-For` напрямую.
-> Если ваше приложение стоит за прокси/балансировщиком — убедитесь, что прокси
-> перезаписывает (а не дописывает) этот заголовок. Иначе клиент может подставить
-> произвольный IP и обойти rate limiting. В production рекомендуется настроить
-> `KnownProxies`/`KnownNetworks` в ASP.NET Core (`ForwardedHeadersOptions`) или
-> реализовать кастомный `IKeyProvider`, по другим идентификационным данным.
+> **Important:** `IpKeyProvider` trusts the `X-Forwarded-For` header directly.
+> If your application is behind a proxy/load balancer — make sure the proxy
+> overwrites (rather than appends) this header. Otherwise, a client can forge
+> an arbitrary IP and bypass rate limiting. In production, configure
+> `KnownProxies`/`KnownNetworks` in ASP.NET Core (`ForwardedHeadersOptions`) or
+> implement a custom `IKeyProvider` that only trusts authenticated identifiers.
 
 ```csharp
 builder.Services.AddRateLimiter(options => { ... })
@@ -486,13 +487,13 @@ public class ClaimsKeyProvider : IKeyProvider
 }
 ```
 
-Ключ клиента + имя политики = уникальный ключ лимитера. Каждая пара (клиент, политика) имеет собственный лимит.
+Client key + policy name = unique limiter key. Each (client, policy) pair has its own limit.
 
 ---
 
-## Обработка 429
+## Handling 429
 
-По умолчанию:
+Default response:
 
 ```
 HTTP/1.1 429 Too Many Requests
@@ -501,9 +502,9 @@ Content-Type: application/json
 {"message":"Rate limit exceeded."}
 ```
 
-Плюс лог: `Rate limit exceeded. Path: /api/resource`
+Plus a log entry: `Rate limit exceeded. Path: /api/resource`
 
-### Замена через DI
+### Custom handler via DI
 
 ```csharp
 builder.Services.AddRateLimiter(options => { ... })
@@ -531,24 +532,24 @@ public class ProblemDetailsHandler : IRateLimitRejectionHandler
 
 ---
 
-## HTTP-заголовки
+## HTTP Headers
 
-Middleware добавляет заголовки при каждом запросе — и при успешном, и при отклонённом:
+The middleware adds headers on every request — both successful and rejected:
 
-| Заголовок | Описание | Пример |
-|-----------|----------|--------|
-| `X-RateLimit-Limit` | Общий лимит | `100` |
-| `X-RateLimit-Remaining` | Осталось | `73` |
-| `X-RateLimit-Reset` | Unix-timestamp сброса | `1725880800` |
-| `Retry-After` | Секунды до сброса (>= 1) | `42` |
+| Header | Description | Example |
+|--------|-------------|---------|
+| `X-RateLimit-Limit` | Total limit | `100` |
+| `X-RateLimit-Remaining` | Remaining | `73` |
+| `X-RateLimit-Reset` | Unix timestamp of reset | `1725880800` |
+| `Retry-After` | Seconds until reset (>= 1) | `42` |
 
 ---
 
-## Атрибуты
+## Attributes
 
 ### `[RateLimitPolicy("name")]`
 
-Назначает политику эндпоинту или контроллеру. `AllowMultiple = false`.
+Assigns a policy to an endpoint or controller. `AllowMultiple = false`.
 
 ```csharp
 [RateLimitPolicy("strict")]
@@ -556,11 +557,11 @@ Middleware добавляет заголовки при каждом запро�
 public IActionResult Search() => Ok();
 ```
 
-На классе — все методы контроллера используют эту политику.
+Applied at the class level — all controller methods use that policy.
 
 ### `[SkipRateLimiting]`
 
-Полностью пропускает rate limiting. Заголовки не устанавливаются.
+Completely skips rate limiting. No headers are set.
 
 ```csharp
 [SkipRateLimiting]
@@ -570,11 +571,11 @@ public IActionResult Health() => Ok();
 
 ---
 
-## Расширение
+## Extensibility
 
-### Свой алгоритм
+### Custom Algorithm
 
-**1. Ключ алгоритма:**
+**1. Algorithm key:**
 
 ```csharp
 public static class CustomAlgorithms
@@ -583,7 +584,7 @@ public static class CustomAlgorithms
 }
 ```
 
-**2. Политика:**
+**2. Policy:**
 
 ```csharp
 public class LeakyBucketPolicy : RateLimiterPolicy
@@ -595,7 +596,7 @@ public class LeakyBucketPolicy : RateLimiterPolicy
 }
 ```
 
-**3. Лимитер:**
+**3. Limiter:**
 
 ```csharp
 public class LeakyBucket : ISerializableRateLimiter
@@ -608,9 +609,9 @@ public class LeakyBucket : ISerializableRateLimiter
 }
 ```
 
-`Serialize`/`Deserialize` — только для Redis. Для InMemory достаточно `IRateLimiter`.
+`Serialize`/`Deserialize` — only needed for Redis. For InMemory, implementing `IRateLimiter` is sufficient.
 
-**4. Фабрика:**
+**4. Factory:**
 
 ```csharp
 public class LeakyBucketFactory : IAlgorithmRateLimiterFactory
@@ -630,7 +631,7 @@ public class LeakyBucketFactory : IAlgorithmRateLimiterFactory
 }
 ```
 
-**5. Extension-метод:**
+**5. Extension method:**
 
 ```csharp
 public static class LeakyBucketOptionsExtensions
@@ -654,7 +655,7 @@ public static class LeakyBucketOptionsExtensions
 }
 ```
 
-**6. Регистрация:**
+**6. Registration:**
 
 ```csharp
 builder.Services.AddRateLimiter(options =>
@@ -670,9 +671,9 @@ builder.Services.AddRateLimiter(options =>
 
 ---
 
-### Своё хранилище
+### Custom Storage
 
-Реализовать `IDataStorage`:
+Implement `IDataStorage`:
 
 ```csharp
 public interface IDataStorage
@@ -684,14 +685,14 @@ public interface IDataStorage
 }
 ```
 
-| Метод | Назначение |
-|-------|-----------|
-| `TryConsumeAsync` | Потратить токен/запрос. Вернуть `true` если лимит не превышен |
-| `GetRemainingAsync` | Сколько осталось |
-| `GetLimitAsync` | Общий лимит (ёмкость) |
-| `GetResetAsync` | Когда лимит сбросится |
+| Method | Purpose |
+|--------|---------|
+| `TryConsumeAsync` | Consume a token/request. Return `true` if limit not exceeded |
+| `GetRemainingAsync` | Remaining count |
+| `GetLimitAsync` | Total limit (capacity) |
+| `GetResetAsync` | When the limit resets |
 
-Регистрация:
+Registration:
 
 ```csharp
 builder.Services.AddRateLimiter(options => { ... })
@@ -700,7 +701,7 @@ builder.Services.AddRateLimiter(options => { ... })
 
 ---
 
-### Свой обработчик 429
+### Custom 429 Handler
 
 ```csharp
 builder.Services.AddRateLimiter(options => { ... })
@@ -709,7 +710,7 @@ builder.Services.AddRateLimiter(options => { ... })
 
 ---
 
-### Свой идентификатор клиента
+### Custom Client Identifier
 
 ```csharp
 builder.Services.AddRateLimiter(options => { ... })
@@ -718,7 +719,7 @@ builder.Services.AddRateLimiter(options => { ... })
 
 ---
 
-## Полный пример
+## Full Example
 
 ```csharp
 var builder = WebApplication.CreateBuilder(args);
@@ -775,20 +776,16 @@ public IActionResult Health() => Ok();
 
 ---
 
-## Зависимости
+## Dependencies
 
-| Пакет | Назначение |
-|-------|-----------|
-| `Microsoft.Extensions.Caching.Memory` | InMemory хранилище |
-| `Microsoft.Extensions.Logging.Abstractions` | Логирование |
-| `StackExchange.Redis` | Redis хранилище |
+| Package | Purpose |
+|---------|---------|
+| `Microsoft.Extensions.Caching.Memory` | InMemory storage |
+| `Microsoft.Extensions.Logging.Abstractions` | Logging |
+| `StackExchange.Redis` | Redis storage |
 
 **Target Framework:** .NET 9.0
 
-## Лицензия
+## License
 
 MIT
-
----
-
-> **Примечание:** XML summary-документация в исходном коде сгенерирована нейросетью. Описания могут содержать неточности.
