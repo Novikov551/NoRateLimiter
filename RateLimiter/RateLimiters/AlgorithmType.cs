@@ -10,7 +10,7 @@
         /// <summary>
         /// Строковый идентификатор алгоритма.
         /// </summary>
-        public string Name { get; set; }
+        public string Name { get; }
 
         public AlgorithmType(string name)
         {

@@ -5,7 +5,7 @@
     /// и абстрактное свойство <see cref="Algorithm"/>, которое каждый наследник
     /// связывает с конкретным алгоритмом.
     /// </summary>
-    public abstract class RateLimiterPolicy : IAlgorithmPolicy
+    public abstract class RateLimiterPolicy
     {
         /// <summary>
         /// Имя политики. Устанавливается через <c>AddTokenBucketLimiter(name, ...)</c> и т.д.

@@ -11,7 +11,8 @@ namespace RateLimiter
     public sealed class DefaultRateLimitRejectionHandler : IRateLimitRejectionHandler
     {
         private readonly ILogger<DefaultRateLimitRejectionHandler> _logger;
-
+        private readonly static string jsonResponse = JsonSerializer.Serialize(new { message = "Rate limit exceeded." });
+       
         public DefaultRateLimitRejectionHandler(ILogger<DefaultRateLimitRejectionHandler> logger)
         {
             _logger = logger;
@@ -24,9 +25,7 @@ namespace RateLimiter
             context.Response.StatusCode = StatusCodes.Status429TooManyRequests;
             context.Response.ContentType = "application/json";
 
-            var json = JsonSerializer.Serialize(new { message = "Rate limit exceeded." });
-
-            await context.Response.WriteAsync(json);
+            await context.Response.WriteAsync(jsonResponse);
         }
     }
 }

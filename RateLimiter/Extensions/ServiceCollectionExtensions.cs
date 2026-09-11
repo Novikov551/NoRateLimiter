@@ -231,14 +231,11 @@ namespace RateLimiter.Extensions
 
             services.AddSingleton<IDataStorage>(sp =>
             {
-                if (multiplexer == null)
-                {
-                    multiplexer = sp.GetRequiredService<IConnectionMultiplexer>();
-                }
+                var resolvedMultiplexer = multiplexer ?? sp.GetRequiredService<IConnectionMultiplexer>();
 
                 var factory = sp.GetRequiredService<IRateLimiterFactory>();
 
-                return new RedisRateLimiterStorage(multiplexer,
+                return new RedisRateLimiterStorage(resolvedMultiplexer,
                     factory,
                     redisOptions);
             });

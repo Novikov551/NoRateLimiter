@@ -107,6 +107,8 @@ namespace RateLimiter.Storages
                 {
                     return result;
                 }
+
+                await Task.Delay(1000);
             }
 
             throw new RedisException("Too many concurrent modifications");
