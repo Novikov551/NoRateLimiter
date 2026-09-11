@@ -49,8 +49,6 @@ Every component can be replaced with a custom implementation via DI.
 
 ## Architecture
 
-![Architecture Diagram](docs/architecture.svg)
-
 ### Request Processing
 
 Every HTTP request passes through the middleware in the following order:
