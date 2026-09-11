@@ -1,4 +1,4 @@
-# RateLimiter
+﻿# RateLimiter
 
 Middleware для ограничения частоты HTTP-запросов в ASP.NET Core.
 
@@ -459,9 +459,16 @@ builder.Services.AddRateLimiter(options => { ... })
 
 По умолчанию — по IP-адресу через `IpKeyProvider`:
 
-1. Проверяет заголовок `X-Forwarded-For` (первый адрес из цепочки)
+1. Проверяет заголовок `X-Forwarded-For` (первый адрес из цепочки прокси)
 2. Если нет — берёт `Connection.RemoteIpAddress`
 3. Если и этого нет — `"anonymous"`
+
+> **Важно:** `IpKeyProvider` доверяет заголовку `X-Forwarded-For` напрямую.
+> Если ваше приложение стоит за прокси/балансировщиком — убедитесь, что прокси
+> перезаписывает (а не дописывает) этот заголовок. Иначе клиент может подставить
+> произвольный IP и обойти rate limiting. В production рекомендуется настроить
+> `KnownProxies`/`KnownNetworks` в ASP.NET Core (`ForwardedHeadersOptions`) или
+> реализовать кастомный `IKeyProvider`, по другим идентификационным данным.
 
 ```csharp
 builder.Services.AddRateLimiter(options => { ... })
